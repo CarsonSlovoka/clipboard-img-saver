@@ -1,4 +1,5 @@
 *.exe
 *.pdf
 *.png
+*.bmp
 coverage.txt
