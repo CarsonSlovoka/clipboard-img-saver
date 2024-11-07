@@ -1,9 +1,4 @@
 #include <windows.h>
-#include <stdlib.h>
-#include <stdio.h>
-#include <string.h>
-
-typedef void* LPVOID;
 
 // 打開剪貼簿並獲取位圖數據
 HBITMAP GetClipboardBitmap() {
