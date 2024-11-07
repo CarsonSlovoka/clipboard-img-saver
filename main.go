@@ -1,21 +1,38 @@
 package main
 
 /*
-#cgo LDFLAGS: -lgdi32
+#cgo windows CFLAGS: -DUNICODE
 // #cgo CFLAGS: -I./csrc -I./cutils  // 表示也會在csrc, cutils目錄之中尋找c文件
-// #cgo CFLAGS: -I./cutils  // 也可以分開寫
+// #cgo windows LDFLAGS: -lgdi32 -luser32 // user32可以不需要
+#cgo windows LDFLAGS: -lgdi32
 #cgo CFLAGS: -I./csrc
 #include "clipboard_helper.c"
 */
 import "C"
 import (
+	"flag"
 	"fmt"
 	"github.com/CarsonSlovoka/clipboard-img-saver/app"
+	"log"
 	"os"
+	"path/filepath"
 	"unsafe"
 )
 
-func saveClipboardImage() error {
+var clipboardChanged chan bool
+
+func init() {
+	clipboardChanged = make(chan bool)
+}
+
+func EmptyClipboard() {
+	if C.OpenClipboard(C.HWND(C.NULL)) != 0 {
+		C.EmptyClipboard()
+		C.CloseClipboard()
+	}
+}
+
+func saveClipboardImage(outputDir string) error {
 	hBitmap := C.GetClipboardBitmap()
 	if hBitmap == nil {
 		return fmt.Errorf("剪貼簿中沒有圖片數據")
@@ -67,8 +84,19 @@ func saveClipboardImage() error {
 	infoHeader[12] = 1 // 平面數
 	infoHeader[14] = byte(bitmap.bmBitsPixel)
 
+	// 使用 Windows API 彈出對話框選擇文件名
+	var outputPath string
+	fmt.Println("請輸入文件名（不包括路徑，將保存於指定目錄）：")
+	if _, err := fmt.Scanln(&outputPath); err != nil {
+		return err
+	}
+	if filepath.Ext(outputPath) == "" {
+		outputPath += ".bmp"
+	}
+	outputPath = filepath.Join(outputDir, outputPath)
+
 	// 打開文件並寫入 BMP 數據
-	file, err := os.Create("clipboard_image.bmp")
+	file, err := os.Create(outputPath)
 	if err != nil {
 		return err
 	}
@@ -93,16 +121,28 @@ func saveClipboardImage() error {
 	if err != nil {
 		return err
 	}
+	absOutputPath, _ := filepath.Abs(outputPath)
+	log.Printf("圖片已順利保存至:%q", absOutputPath)
+	EmptyClipboard()
 
 	return nil
 }
 
-func main() {
+func init() {
 	print(app.About())
-	err := saveClipboardImage()
+}
+
+func main() {
+	var outputDir string
+	flag.StringVar(&outputDir, "output", ".", "指定圖片保存的目錄")
+	flag.Parse()
+	if outputDir == "" {
+		fmt.Println("必須指定輸出目錄，使用 -output 參數來指定")
+		return
+	}
+	fmt.Printf("圖片輸出目錄: %s\n", outputDir)
+	err := saveClipboardImage(outputDir)
 	if err != nil {
-		fmt.Printf("錯誤: %s\n", err)
-	} else {
-		fmt.Println("成功保存剪貼簿圖片到 clipboard_image.bmp")
+		log.Printf("錯誤: %s\n", err)
 	}
 }
