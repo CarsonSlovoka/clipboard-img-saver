@@ -10,11 +10,13 @@ package main
 
 // WNDPROC myDefWindowProcW = DefWindowProcW;
 
+const UINT WM_IMG_SAVE = WM_USER + 1;
+
 // 定義一個簡單的窗口過程
 LRESULT CALLBACK MyWindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
-    // if (uMsg == WM_CLIPBOARDUPDATE) {
-    //     PostMessage(hwnd, WM_USER + 1, 0, 0);
-    // }
+    if (uMsg == WM_CLIPBOARDUPDATE) {
+        PostMessage(hwnd, WM_IMG_SAVE, 0, 0);
+    }
     return DefWindowProc(hwnd, uMsg, wParam, lParam);
 }
 
@@ -248,7 +250,8 @@ func main() {
 		if ret <= 0 {
 			break
 		}
-		if msg.message == C.WM_CLIPBOARDUPDATE {
+		// if msg.message == C.WM_CLIPBOARDUPDATE {
+		if msg.message == C.WM_IMG_SAVE {
 			clipboardChanged <- true
 			log.Println("檢測到剪貼簿變更")
 			// continue // 與這個無關，假設有錯誤加了這個還是會卡住
