@@ -1,31 +1,11 @@
 package main
 
 /*
-
-// GetBitmapBits 和 GetObjectA。這通常是因為這些函數屬於 Windows API 的某個庫，而鏈接器沒有正確地鏈接該庫
-// 所以要記得添加lgdi32
 #cgo LDFLAGS: -lgdi32
-#include <windows.h>
-#include <stdlib.h>
-#include <stdio.h>
-#include <string.h>
-
-typedef void* LPVOID;
-
-// 打開剪貼簿並獲取位圖數據
-HBITMAP GetClipboardBitmap() {
-    if (OpenClipboard(NULL)) {
-        HANDLE hBitmap = GetClipboardData(CF_BITMAP);
-        CloseClipboard();
-        return (HBITMAP)hBitmap;
-    }
-    return NULL;
-}
-
-// 提供一個輔助函數來獲取 HBITMAP 作為 HANDLE
-HANDLE GetBitmapHandle(HBITMAP hBitmap) {
-    return (HANDLE)hBitmap;
-}
+// #cgo CFLAGS: -I./csrc -I./cutils  // 表示也會在csrc, cutils目錄之中尋找c文件
+// #cgo CFLAGS: -I./cutils  // 也可以分開寫
+#cgo CFLAGS: -I./csrc
+#include "clipboard_helper.c"
 */
 import "C"
 import (
