@@ -28,9 +28,9 @@ HANDLE GetBitmapHandle(HBITMAP hBitmap) {
 }
 */
 import "C"
-
 import (
 	"fmt"
+	"github.com/CarsonSlovoka/clipboard-img-saver/app"
 	"os"
 	"unsafe"
 )
@@ -118,6 +118,7 @@ func saveClipboardImage() error {
 }
 
 func main() {
+	print(app.About())
 	err := saveClipboardImage()
 	if err != nil {
 		fmt.Printf("錯誤: %s\n", err)
