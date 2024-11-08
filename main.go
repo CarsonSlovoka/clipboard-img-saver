@@ -166,12 +166,13 @@ func getSaveFileNameByScan() (string, error) {
 
 func GetSaveFileName(title, defaultSaveDir, ext string) (string, error) {
 	// image (*.webp)\0*.webp\0
-	cFilter := goStrToCWideString(
-		fmt.Sprintf("image (*%s)\x00*%s\x00",
-			ext, ext,
-		) + "All Files (*.*)\x00*.*\x00\x00",
-	)
+	filterUTF16, err := buildFilter(ext)
+	if err != nil {
+		return "", err
+	}
+	cFilter := utf16ToCWideString(filterUTF16)
 	defer C.free(unsafe.Pointer(cFilter))
+
 	cDefExt := goStrToCWideString(ext[1:])
 	defer C.free(unsafe.Pointer(cDefExt))
 	cTitle := goStrToCWideString(title)
