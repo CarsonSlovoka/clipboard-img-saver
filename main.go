@@ -4,10 +4,11 @@ package main
 #cgo windows CFLAGS: -DUNICODE
 // #cgo CFLAGS: -I./csrc -I./cutils  // 表示也會在csrc, cutils目錄之中尋找c文件
 // #cgo windows LDFLAGS: -lgdi32 -luser32 // user32可以不需要
-#cgo windows LDFLAGS: -lgdi32
+#cgo windows LDFLAGS: -lgdi32 -lcomdlg32
 #cgo CFLAGS: -I./csrc
 #include "clipboard_helper.c"
 #include "window.c"
+#include "dialog.c"
 */
 import "C"
 import (
@@ -18,9 +19,13 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 	"syscall"
 	"unsafe"
 )
+
+const MAX_PATH = 260
+const ERROR_CANCELLED = 1223
 
 func EmptyClipboard() {
 	if C.OpenClipboard(C.HWND(C.NULL)) != 0 {
@@ -81,12 +86,11 @@ func saveClipboardImage(outputDir, format string, quality uint8) error {
 	infoHeader[12] = 1 // 平面數
 	infoHeader[14] = byte(bitmap.bmBitsPixel)
 
-	// 使用 Windows API 彈出對話框選擇文件名
-	var outputPath string
-	fmt.Println("請輸入文件名（不包括路徑，將保存於指定目錄）：")
-	if _, err := fmt.Scanln(&outputPath); err != nil {
-		if err.Error() == "unexpected newline" {
-			log.Printf("檔名為空，跳過不存檔")
+	// outputPath, err := getSaveFileNameByScan()
+	outputPath, err := GetSaveFileName("save image", outputDir, format)
+	if err != nil {
+		if err.(syscall.Errno) == ERROR_CANCELLED {
+			log.Printf("取消存檔")
 			return nil
 		}
 		return err
@@ -94,7 +98,7 @@ func saveClipboardImage(outputDir, format string, quality uint8) error {
 
 	buf := bytes.NewBuffer(nil)
 
-	_, err := buf.Write(fileHeader)
+	_, err = buf.Write(fileHeader)
 	if err != nil {
 		return err
 	}
@@ -129,7 +133,7 @@ func saveClipboardImage(outputDir, format string, quality uint8) error {
 		result = buf.Bytes()
 	}
 
-	outputPath = filepath.Join(outputDir, outputPath)
+	// outputPath = filepath.Join(outputDir, outputPath)  // 如果使用GetSaveFileNameW，出來的路徑已經是絕對路徑
 	var file *os.File
 	file, err = os.Create(outputPath)
 	if err != nil {
@@ -143,6 +147,49 @@ func saveClipboardImage(outputDir, format string, quality uint8) error {
 	// EmptyClipboard()
 
 	return nil
+}
+
+func getSaveFileNameByScan() (string, error) {
+	var outputPath string
+	fmt.Println("請輸入文件名（不包括路徑，將保存於指定目錄）：")
+	if _, err := fmt.Scanln(&outputPath); err != nil {
+		/*
+			if err.Error() == "unexpected newline" {
+				log.Printf("檔名為空，跳過不存檔")
+				return "", nil
+			}
+		*/
+		return "", err
+	}
+	return outputPath, nil
+}
+
+func GetSaveFileName(title, defaultSaveDir, ext string) (string, error) {
+	// image (*.webp)\0*.webp\0
+	cFilter := goStrToCWideString(
+		fmt.Sprintf("image (*%s)\x00*%s\x00",
+			ext, ext,
+		) + "All Files (*.*)\x00*.*\x00\x00",
+	)
+	defer C.free(unsafe.Pointer(cFilter))
+	cDefExt := goStrToCWideString(ext[1:])
+	defer C.free(unsafe.Pointer(cDefExt))
+	cTitle := goStrToCWideString(title)
+	defer C.free(unsafe.Pointer(cTitle))
+	cInitialDir := goStrToCWideString(defaultSaveDir)
+	defer C.free(unsafe.Pointer(cInitialDir))
+
+	cFileName := C.ShowSaveFileDialog(cInitialDir, cTitle, cFilter, cDefExt)
+	if cFileName == nil {
+		errCode := C.CommDlgExtendedError()
+		if errCode == 0 {
+			return "", syscall.Errno(ERROR_CANCELLED)
+		}
+		return "", fmt.Errorf("GetSaveFileNameW failed with error code %w", syscall.Errno(errCode))
+	}
+	defer C.free(unsafe.Pointer(cFileName))
+	outputPath := wcharPtrToString(cFileName)
+	return outputPath, nil
 }
 
 var clipboardChanged chan bool
@@ -204,6 +251,8 @@ func AddClipboardFormatListener() error {
 }
 
 func main() {
+	runtime.LockOSThread()
+
 	var outputDir string
 	var format string
 	var quality uint
@@ -224,10 +273,12 @@ func main() {
 		for {
 			select {
 			case <-clipboardChanged:
+				runtime.LockOSThread()
 				err := saveClipboardImage(outputDir, format, uint8(quality))
 				if err != nil {
 					log.Printf("錯誤: %s\n", err) // 如果有錯誤可能就會卡住，收不到下一個GetMessage的消息. 可能是stdout有衝突?
 				}
+				runtime.UnlockOSThread()
 			}
 		}
 	}()
