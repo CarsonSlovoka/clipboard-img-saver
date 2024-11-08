@@ -12,7 +12,10 @@
   - [ ] 線條
   - [ ] 螢光筆
   - [ ] 矩形框
-- [ ] 存成webp格式
+- 保存格式
+  - [x] webp: 需要系統有`cwebp.exe`, 可從[libwebp-1.4.0-windows-x64.zip]取得
+  - [x] bmp
+
 
 ## 編譯
 
@@ -34,7 +37,9 @@ choco install mingw -y
 編譯
 
 ```
-go build -o clipboard_image_saver.exe main.go
+git clone https://github.com/CarsonSlovoka/clipboard-img-saver.git
+cd clipboard-img-saver
+go build -o clipboard_image_saver.exe .
 ```
 
 ---
@@ -49,6 +54,28 @@ go env CGO_ENABLED
 
 `CGO_ENABLED=1`其實是go預設的設定，因此只需要安裝好gcc即可
 
+
+## webp
+
+你可以從這些連結來了解webp
+
+- https://github.com/webmproject/libwebp/tree/main
+- https://developers.google.com/speed/webp?hl=zh-tw
+
+[下載列表](https://storage.googleapis.com/downloads.webmproject.org/releases/webp/index.html)
+
+[libwebp-1.4.0-windows-x64.zip]
+
+你可以使用裡面的include, lib來鑲嵌，但是他是用MSVC(Microsoft Visual C++)去編譯，所以如果你用的是MinGW(Minimalist GNU for Windows)會編譯失敗
+
+也可以善用裡面bin目錄提供的執行檔即可
+
+[libwebp-1.4.0-windows-x64/bin/cwebp.exe](https://github.com/webmproject/libwebp/blob/f999d94/doc/tools.md#encoding-tool)
+
+```yaml
+cwebp input.png -q 80 -o output.webp  # q為輸出質量, 預設75範圍從[0~100]
+```
+
 ## 相關知識
 
 MinGW（Minimalist GNU for Windows）和 GCC（GNU Compiler **Collection**）有密切的關係，
@@ -62,3 +89,5 @@ MinGW（Minimalist GNU for Windows）和 GCC（GNU Compiler **Collection**）有
 3. 編譯器與鏈接器：除了 GCC 編譯器，MinGW 還包含了其他工具，例如 ld（鏈接器）、as（彙編器），用於完成整個編譯和鏈接過程，從而在 Windows 上生成可執行檔
 4. 與 MSYS 的配合：通常，MinGW 和 MSYS（Minimal SYStem）工具包一起使用。MSYS 提供了 UNIX 命令行工具（例如 bash、make 等），讓 Windows 平台上的開發體驗更接近於 UNIX 環境，使 GCC 和其他開發工具更易於使用
 
+
+[libwebp-1.4.0-windows-x64.zip]: https://storage.googleapis.com/downloads.webmproject.org/releases/webp/libwebp-1.4.0-windows-x64.zip

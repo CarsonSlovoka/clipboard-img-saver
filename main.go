@@ -26,6 +26,7 @@ WNDPROC GetMyWindowProc() {
 */
 import "C"
 import (
+	"bytes"
 	"flag"
 	"fmt"
 	"github.com/CarsonSlovoka/clipboard-img-saver/app"
@@ -43,7 +44,7 @@ func EmptyClipboard() {
 	}
 }
 
-func saveClipboardImage(outputDir string) error {
+func saveClipboardImage(outputDir, format string, quality uint8) error {
 	hBitmap := C.GetClipboardBitmap()
 	if hBitmap == nil {
 		return fmt.Errorf("剪貼簿中沒有圖片數據")
@@ -106,25 +107,13 @@ func saveClipboardImage(outputDir string) error {
 		return err
 	}
 
-	if filepath.Ext(outputPath) == "" {
-		outputPath += ".bmp"
-	}
-	outputPath = filepath.Join(outputDir, outputPath)
+	buf := bytes.NewBuffer(nil)
 
-	// 打開文件並寫入 BMP 數據
-	file, err := os.Create(outputPath)
+	_, err := buf.Write(fileHeader)
 	if err != nil {
 		return err
 	}
-	defer func() {
-		_ = file.Close()
-	}()
-
-	_, err = file.Write(fileHeader)
-	if err != nil {
-		return err
-	}
-	_, err = file.Write(infoHeader)
+	_, err = buf.Write(infoHeader)
 	if err != nil {
 		return err
 	}
@@ -133,10 +122,37 @@ func saveClipboardImage(outputDir string) error {
 	pixelData := make([]byte, pixelDataSize)
 	// C.GetBitmapBits(C.HBITMAP(hBitmap), C.LONG(pixelDataSize), unsafe.Pointer(&pixelData[0])) // cannot use _cgo2 (variable of type unsafe.Pointer) as _Ctype_LPVOID value in argument to _Cfunc_GetBitmapBits
 	C.GetBitmapBits(C.HBITMAP(hBitmap), C.LONG(pixelDataSize), C.LPVOID(unsafe.Pointer(&pixelData[0])))
-	_, err = file.Write(pixelData)
+	_, err = buf.Write(pixelData)
 	if err != nil {
 		return err
 	}
+
+	var result []byte
+	if format == ".webp" {
+		if filepath.Ext(outputPath) == "" {
+			outputPath += ".webp"
+		}
+		result, err = convertToWebP(buf.Bytes(), quality)
+		if err != nil {
+			return err
+		}
+	} else {
+		// 一律存成bmp
+		if filepath.Ext(outputPath) == "" {
+			outputPath += ".bmp"
+		}
+		result = buf.Bytes()
+	}
+
+	outputPath = filepath.Join(outputDir, outputPath)
+	var file *os.File
+	file, err = os.Create(outputPath)
+	if err != nil {
+		return err
+	}
+	_, _ = file.Write(result)
+	_ = file.Close()
+
 	absOutputPath, _ := filepath.Abs(outputPath)
 	log.Printf("圖片已順利保存至:%q", absOutputPath)
 	// EmptyClipboard()
@@ -204,7 +220,11 @@ func AddClipboardFormatListener() error {
 
 func main() {
 	var outputDir string
-	flag.StringVar(&outputDir, "output", ".", "指定圖片保存的目錄")
+	var format string
+	var quality uint
+	flag.StringVar(&outputDir, "o", ".", "指定圖片保存的目錄")
+	flag.StringVar(&format, "format", ".webp", "輸出的格式, .bmp, .webp")
+	flag.UintVar(&quality, "q", 75, "輸出質量(僅限webp有用)")
 	flag.Parse()
 	if outputDir == "" {
 		fmt.Println("必須指定輸出目錄，使用 -output 參數來指定")
@@ -219,7 +239,7 @@ func main() {
 		for {
 			select {
 			case <-clipboardChanged:
-				err := saveClipboardImage(outputDir)
+				err := saveClipboardImage(outputDir, format, uint8(quality))
 				if err != nil {
 					log.Printf("錯誤: %s\n", err) // 如果有錯誤可能就會卡住，收不到下一個GetMessage的消息. 可能是stdout有衝突?
 				}
