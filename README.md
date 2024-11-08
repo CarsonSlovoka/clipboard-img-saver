@@ -4,6 +4,10 @@
 
 此外此專案可以幫助想學習用go搭配C，使用windows api的人來當作參考
 
+## Download
+
+[Clipboard.Image.saver_windows_amd64_v0.1.0.zip](https://github.com/CarsonSlovoka/clipboard-img-saver/releases/download/v0.1.0/Clipboard.Image.saver_windows_amd64_v0.0.0.zip)
+
 ## 特色
 
 - [X] 保存剪貼簿圖片
