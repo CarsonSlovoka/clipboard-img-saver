@@ -1,6 +1,10 @@
 *.exe
+*.zip
 *.pdf
 *.png
 *.bmp
 coverage.txt
 *.webp
+
+# 透過build/build.go生成
+bin/*
