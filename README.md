@@ -54,6 +54,18 @@ go env CGO_ENABLED
 
 `CGO_ENABLED=1`其實是go預設的設定，因此只需要安裝好gcc即可
 
+## USAGE
+
+```yaml
+# go build -o clipboard_image_saver.exe .
+# 你可以考慮換個比較簡單的執行檔名稱
+# go build -o cis.exe .
+cis.exe -help # 查看幫助
+cis.exe -q 20 # 以webp輸出, quality 20, (預設75)
+cis.exe -o "C:\myOutputDir"  # 指定輸出目錄, 預設為當前目錄
+cis.exe -format .bmp  # 輸出成bmp格式
+```
+
 
 ## webp
 
