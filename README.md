@@ -34,7 +34,14 @@ choco install mingw -y
 
 ---
 
-編譯
+安裝
+
+```
+go install github.com/CarsonSlovoka/clipboard-img-saver@latest
+```
+
+
+也可以自己編譯
 
 ```
 git clone https://github.com/CarsonSlovoka/clipboard-img-saver.git
