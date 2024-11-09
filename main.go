@@ -33,21 +33,27 @@ func EmptyClipboard() {
 	}
 }
 
-func saveClipboardImage(outputDir, format string, quality uint8) error {
+func saveClipboardImage(outputDir, format string, quality uint8, enableDialog bool) (err error) {
 	if C.IsClipboardImage() != C.TRUE {
 		// 剪貼簿的內容非圖片
 		return nil
 	}
 
-	// 先問使用者要不要存檔，如果不保存底下的事都不用做
-	// outputPath, err := getSaveFileNameByScan()
-	outputPath, err := GetSaveFileName("save image", outputDir, format)
-	if err != nil {
-		if err.(syscall.Errno) == ERROR_CANCELLED {
-			log.Printf("取消存檔")
-			return nil
+	var outputPath string
+	if enableDialog {
+		outputPath, err = GetSaveFileName("save image", outputDir, format)
+		if err != nil {
+			if err.(syscall.Errno) == ERROR_CANCELLED {
+				log.Printf("取消存檔")
+				return nil
+			}
+			return err
 		}
-		return err
+	} else {
+		outputPath, err = getSaveFileNameByScan()
+		if err != nil {
+			return err
+		}
 	}
 
 	if C.OpenClipboard(nil) == C.FALSE {
@@ -211,9 +217,11 @@ func main() {
 	var outputDir string
 	var format string
 	var quality uint
+	var enableDialog bool
 	flag.StringVar(&outputDir, "o", ".", "指定圖片保存的目錄")
 	flag.StringVar(&format, "format", ".webp", "輸出的格式, .bmp, .webp")
 	flag.UintVar(&quality, "q", 75, "輸出質量(僅限webp有用)")
+	flag.BoolVar(&enableDialog, "dialog", true, "enable GetSaveFileNameW?")
 	flag.Parse()
 	if outputDir == "" {
 		fmt.Println("必須指定輸出目錄，使用 -output 參數來指定")
@@ -229,7 +237,7 @@ func main() {
 			select {
 			case <-clipboardChanged:
 				runtime.LockOSThread()
-				err := saveClipboardImage(outputDir, format, uint8(quality))
+				err := saveClipboardImage(outputDir, format, uint8(quality), enableDialog)
 				if err != nil {
 					log.Printf("錯誤: %s\n", err) // 如果有錯誤可能就會卡住，收不到下一個GetMessage的消息. 可能是stdout有衝突?
 				}
