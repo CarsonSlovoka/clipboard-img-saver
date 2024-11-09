@@ -6,6 +6,7 @@ package main
 // #cgo windows LDFLAGS: -lgdi32 -luser32 // user32可以不需要
 #cgo windows LDFLAGS: -lgdi32 -lcomdlg32
 #cgo CFLAGS: -I./csrc
+#include <stdio.h>
 #include "clipboard_helper.c"
 #include "window.c"
 #include "dialog.c"
@@ -13,6 +14,7 @@ package main
 import "C"
 import (
 	"bytes"
+	"encoding/binary"
 	"flag"
 	"fmt"
 	"github.com/CarsonSlovoka/clipboard-img-saver/app"
@@ -35,57 +37,8 @@ func EmptyClipboard() {
 }
 
 func saveClipboardImage(outputDir, format string, quality uint8) error {
-	hBitmap := C.GetClipboardBitmap()
-	if hBitmap == nil {
-		return fmt.Errorf("剪貼簿中沒有圖片數據")
-	}
 
-	// 創建位圖信息頭
-	// https://learn.microsoft.com/en-us/windows/win32/api/wingdi/ns-wingdi-bitmap
-	var bitmap C.BITMAP
-
-	/*
-		C.GetObject(
-			C.HANDLE(hBitmap),  // cannot convert hBitmap (variable of type _Ctype_HBITMAP) to type _Ctype_HANDLE
-			C.sizeof_BITMAP,
-			unsafe.Pointer(&bitmap), // cannot use _cgo2 (variable of type unsafe.Pointer) as _Ctype_LPVOID value in argument to _Cfunc_GetObject
-		)
-	*/
-	// 使用 GetBitmapHandle 來獲取 HANDLE 類型
-	hBitmapHandle := C.GetBitmapHandle(hBitmap)
-	C.GetObject(hBitmapHandle, C.sizeof_BITMAP, C.LPVOID(unsafe.Pointer(&bitmap)))
-
-	pixelDataSize := int(bitmap.bmWidthBytes) * int(bitmap.bmHeight)
-	bitmap.bmHeight *= -1 // 調整 BMP 頭信息中的高度：將位圖的高度設置為負值，表示數據從上到下排列
-
-	// BMP 文件頭
-	fileHeader := make([]byte, 14)
-	infoHeader := make([]byte, 40)
-
-	// 填寫 BMP 文件頭 (BITMAPFILEHEADER)
-	//  all the integer values are stored in "little-endian" format
-	fileHeader[0] = 'B'
-	fileHeader[1] = 'M'
-	fileSize := 14 + 40 + int(bitmap.bmWidthBytes)*int(bitmap.bmHeight)
-	fileHeader[2] = byte(fileSize)
-	fileHeader[3] = byte(fileSize >> 8)
-	fileHeader[4] = byte(fileSize >> 16)
-	fileHeader[5] = byte(fileSize >> 24)
-	fileHeader[10] = 14 + 40
-
-	// 填寫 BMP 信息頭 (BITMAPINFOHEADER)
-	infoHeader[0] = 40 // 信息頭大小
-	infoHeader[4] = byte(bitmap.bmWidth)
-	infoHeader[5] = byte(bitmap.bmWidth >> 8)
-	infoHeader[6] = byte(bitmap.bmWidth >> 16)
-	infoHeader[7] = byte(bitmap.bmWidth >> 24)
-	infoHeader[8] = byte(bitmap.bmHeight)
-	infoHeader[9] = byte(bitmap.bmHeight >> 8)
-	infoHeader[10] = byte(bitmap.bmHeight >> 16)
-	infoHeader[11] = byte(bitmap.bmHeight >> 24)
-	infoHeader[12] = 1 // 平面數
-	infoHeader[14] = byte(bitmap.bmBitsPixel)
-
+	// 先問使用者要不要存檔，如果不保存底下的事都不用做
 	// outputPath, err := getSaveFileNameByScan()
 	outputPath, err := GetSaveFileName("save image", outputDir, format)
 	if err != nil {
@@ -96,25 +49,107 @@ func saveClipboardImage(outputDir, format string, quality uint8) error {
 		return err
 	}
 
-	buf := bytes.NewBuffer(nil)
-
-	_, err = buf.Write(fileHeader)
-	if err != nil {
-		return err
+	hBitmap := C.GetClipboardBitmap()
+	if hBitmap == nil {
+		return fmt.Errorf("剪貼簿中沒有圖片數據")
 	}
-	_, err = buf.Write(infoHeader)
-	if err != nil {
-		return err
-	}
+	defer C.DeleteObject(C.HGDIOBJ(hBitmap))
 
-	// 寫入像素數據
+	// 使用 GetDIBits 獲取位圖訊息與像素數據 (GetBitmapBits已經過時了，不推薦用)
+	hdc := C.GetDC(nil)
+	defer C.ReleaseDC(nil, hdc)
+
+	var bmi C.BITMAPINFO // https://learn.microsoft.com/zh-tw/windows/win32/api/wingdi/ns-wingdi-bitmapinfo
+	// bmi.bmiHeader.biBitCount // 為位元深度，如果它是32表示有alpha通道
+	// C.ZeroMemory(unsafe.Pointer(&bmi), C.sizeof_BITMAPINFO) // could not determine kind of name for C.ZeroMemory
+	C.memset(unsafe.Pointer(&bmi), 0, C.sizeof_BITMAPINFO) // 使用memset替代ZeroMemory
+
+	// 在GetDIBits之前，可以先設定我們要的內容
+	bmi.bmiHeader.biSize = C.DWORD(C.sizeof_BITMAPINFOHEADER)
+	// 位圖訊息, GetDIBits第一次調用取得bmi.Header資訊, BITMAPINFO: https://learn.microsoft.com/en-us/windows/win32/api/wingdi/ns-wingdi-bitmapinfo
+	ret := C.GetDIBits(hdc, hBitmap, 0, 0, nil, &bmi, C.DIB_RGB_COLORS)
+	if ret == 0 {
+		return fmt.Errorf("GetDIBits 取得位圖訊息失敗")
+	}
+	bmi.bmiHeader.biBitCount = 24
+	bmi.bmiHeader.biCompression = C.BI_RGB // 未壓縮0 BI_RGB; 3: BI_BITFIELDS
+	bmi.bmiHeader.biSizeImage = 0          // 未壓縮就設定為0; 讓後面計算
+
+	// 取得數據緩衝空間大小
+	pixelDataSize := int(bmi.bmiHeader.biSizeImage)
+	if pixelDataSize == 0 {
+		// https://learn.microsoft.com/en-us/windows/win32/api/wingdi/ns-wingdi-bitmapinfoheader#calculating-surface-stride
+		// 4byte對齊，所以不足32bit就多給1個4byte; (x+31)&^31可以+31多出來的尾數去除; >> 3 相當於除上8 也就是單位從bit換成byte
+		// invalid operation: bmi.bmiHeader.biWidth * int32(bmi.bmiHeader.biBitCount) (mismatched types _Ctype_LONG and int32)
+		stride := (((int32(bmi.bmiHeader.biWidth) * int32(bmi.bmiHeader.biBitCount)) + 31) & ^31) >> 3
+		pixelDataSize = int(stride) * int(bmi.bmiHeader.biHeight)
+		// bmi.bmiHeader.biSizeImage = pixelDataSize // cannot use pixelDataSize (variable of type int) as _Ctype_DWORD value in assignment
+		bmi.bmiHeader.biSizeImage = C.DWORD(pixelDataSize)
+	}
 	pixelData := make([]byte, pixelDataSize)
-	// C.GetBitmapBits(C.HBITMAP(hBitmap), C.LONG(pixelDataSize), unsafe.Pointer(&pixelData[0])) // cannot use _cgo2 (variable of type unsafe.Pointer) as _Ctype_LPVOID value in argument to _Cfunc_GetBitmapBits
-	C.GetBitmapBits(C.HBITMAP(hBitmap), C.LONG(pixelDataSize), C.LPVOID(unsafe.Pointer(&pixelData[0])))
-	_, err = buf.Write(pixelData)
-	if err != nil {
-		return err
+
+	// 獲取圖像數據, 第二次調用GetDIBits取得取得數據內容 也就是填充BITMAPINFO.bmiColors的內容
+	// ret = C.GetDIBits(hdc, hBitmap, 0, C.UINT(bmi.bmiHeader.biHeight), unsafe.Pointer(&pixelData[0]), &bmi, C.DIB_RGB_COLORS) // cannot use _cgo4 (variable of type unsafe.Pointer) as _Ctype_LPVOID value in argument to _Cfunc_GetDIBits
+	ret = C.GetDIBits(hdc, hBitmap, 0, C.UINT(bmi.bmiHeader.biHeight), C.LPVOID(unsafe.Pointer(&pixelData[0])), &bmi, C.DIB_RGB_COLORS)
+	if ret == 0 {
+		return fmt.Errorf("GetDIBits 獲取圖像數據失敗. errCode %v\n", C.GetLastError())
 	}
+
+	// BMP 文件頭
+	bfHeader := make([]byte, 14) // FileHeader
+
+	// 建立BMP 文件頭 BITMAPFILEHEADER https://learn.microsoft.com/zh-tw/windows/win32/api/wingdi/ns-wingdi-bitmapfileheader
+	// all the integer values are stored in "little-endian" format
+	bfHeader[0] = 'B'
+	bfHeader[1] = 'M'
+	fileSize := 14 + 40
+
+	// TODO 待檢驗
+	nColors := 0
+	if bmi.bmiHeader.biBitCount <= 8 {
+		if bmi.bmiHeader.biClrUsed > 0 {
+			nColors = int(bmi.bmiHeader.biClrUsed)
+		} else {
+			nColors = 1 << bmi.bmiHeader.biBitCount
+		}
+		fileSize += nColors * 4
+	}
+	fileSize += len(pixelData)
+	bfHeader[2] = byte(fileSize)
+	bfHeader[3] = byte(fileSize >> 8)
+	bfHeader[4] = byte(fileSize >> 16)
+	bfHeader[5] = byte(fileSize >> 24)
+	offsetBits := 14 + 40 + nColors*4
+	binary.LittleEndian.PutUint32(bfHeader[10:], uint32(offsetBits))
+
+	// 建立BMP 訊息頭 BITMAPINFOHEADER https://learn.microsoft.com/zh-tw/windows/win32/api/wingdi/ns-wingdi-bitmapinfoheader
+	// 將 BITMAPINFOHEADER 轉成[]byte
+	biHeader := make([]byte, 40) // InfoHeader
+	header := (*[40]byte)(unsafe.Pointer(&bmi.bmiHeader))
+	copy(biHeader[:], header[:])
+
+	// 寫入 BMP 文件
+	buf := bytes.NewBuffer(nil)
+	buf.Write(bfHeader[:])
+	buf.Write(biHeader[:])
+
+	// TODO 待檢驗 處理顏色表
+	if nColors > 0 {
+		colorTableSize := nColors * 4 // 每個 RGBQUAD 佔 4 字節
+		colorTable := make([]byte, colorTableSize)
+		// 讀取顏色表
+		// 由於 Go 無法直接從 C 結構體中獲取動態長度的陣列，這裡需要使用 unsafe 來讀取
+		for i := 0; i < nColors; i++ {
+			rgbQuad := (*[4]byte)(unsafe.Pointer(&bmi.bmiColors[i]))
+			colorTable[i*4] = rgbQuad[0]   // Blue
+			colorTable[i*4+1] = rgbQuad[1] // Green
+			colorTable[i*4+2] = rgbQuad[2] // Red
+			colorTable[i*4+3] = rgbQuad[3] // Reserved
+		}
+		buf.Write(colorTable)
+	}
+
+	buf.Write(pixelData)
 
 	var result []byte
 	if format == ".webp" {
