@@ -75,6 +75,8 @@ cis.exe -help # 查看幫助
 cis.exe -q 20 # 以webp輸出, quality 20, (預設75)
 cis.exe -o "C:\myOutputDir"  # 指定輸出目錄, 預設為當前目錄
 cis.exe -format .bmp  # 輸出成bmp格式
+cis.exe -dialog=1 # 此為預設，輸出的時候可以跳出保存的視窗(可輸出自不同的目錄)
+cis.exe -dialog=0 # 使用scan的方式，於console輸入輸出檔名
 ```
 
 
