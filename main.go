@@ -19,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"syscall"
 	"unsafe"
 )
@@ -155,10 +156,6 @@ func GetSaveFileName(title, defaultSaveDir, ext string) (string, error) {
 
 var clipboardChanged chan bool
 
-func init() {
-	print(app.About())
-}
-
 func AddClipboardFormatListener() error {
 	// 創建一個隱藏的窗口
 
@@ -218,16 +215,29 @@ func main() {
 	var format string
 	var quality uint
 	var enableDialog bool
+	var version, versionDetails bool
 	flag.StringVar(&outputDir, "o", ".", "指定圖片保存的目錄")
 	flag.StringVar(&format, "format", ".webp", "輸出的格式, .bmp, .webp")
 	flag.UintVar(&quality, "q", 75, "輸出質量(僅限webp有用)")
 	flag.BoolVar(&enableDialog, "dialog", true, "enable GetSaveFileNameW?")
+	flag.BoolVar(&version, "v", false, "version")
+	flag.BoolVar(&versionDetails, "v-full", false, "version and buildInfo")
 	flag.Parse()
+	if version || versionDetails {
+		fmt.Println(app.About())
+		if versionDetails {
+			info, ok := debug.ReadBuildInfo()
+			if ok {
+				fmt.Println(info)
+			}
+		}
+		return
+	}
+
 	if outputDir == "" {
 		fmt.Println("必須指定輸出目錄，使用 -output 參數來指定")
 		return
 	}
-	fmt.Printf("圖片輸出目錄: %s\n", outputDir)
 
 	clipboardChanged = make(chan bool)
 
