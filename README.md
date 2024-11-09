@@ -6,7 +6,7 @@
 
 ## Download
 
-[Clipboard.Image.saver_windows_amd64_v0.1.0.zip](https://github.com/CarsonSlovoka/clipboard-img-saver/releases/download/v0.1.0/Clipboard.Image.saver_windows_amd64_v0.0.0.zip)
+[Clipboard.Image.saver_windows_amd64.zip](https://github.com/CarsonSlovoka/clipboard-img-saver/releases/latest)
 
 ## 特色
 
