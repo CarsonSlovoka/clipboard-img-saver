@@ -1,46 +1,105 @@
+#include <stdio.h>
 #include <windows.h>
 
-// 打開剪貼簿並獲取位圖數據
-HBITMAP GetClipboardBitmap() {
-    HBITMAP hBitmap = NULL;
-    if (OpenClipboard(NULL)) {
-        // 當使用截圖按鈕`Print Screen Key`，剪貼簿裡面可能會包含其他格式，例如CF_DIB或者CF_DIBV5，僅用CF_BITMAP去檢驗會不夠完整
-        // 因此最後會導致獲取到位圖失敗，或者得到NULL
-        // HANDLE hBitmap = GetClipboardData(CF_BITMAP);
-
-        if (IsClipboardFormatAvailable(CF_BITMAP)) {
-            hBitmap = (HBITMAP)GetClipboardData(CF_BITMAP);
-            // hBitmap = (HBITMAP)CopyImage(GetClipboardData(CF_BITMAP), IMAGE_BITMAP, 0, 0, LR_COPYRETURNORG);
-        } else if (IsClipboardFormatAvailable(CF_DIB) || IsClipboardFormatAvailable(CF_DIBV5)) {
-            UINT format = IsClipboardFormatAvailable(CF_DIB) ? CF_DIB : CF_DIBV5;
-            printf("format: %d\n", format);
-            HANDLE hDIB = GetClipboardData(format);
-            if (hDIB != NULL) {
-                // 將 DIB 轉為 HBITMAP
-                BITMAPINFOHEADER* bih = (BITMAPINFOHEADER*)GlobalLock(hDIB);
-                if (bih != NULL) {
-                    HDC hdc = GetDC(NULL);
-                    // hBitmap = CreateDIBitmap(hdc, bih, CBM_INIT, (BYTE*)bih + bih->biSize + bih->biClrUsed * sizeof(RGBQUAD), (BITMAPINFO*)bih, DIB_RGB_COLORS);
-                    void* bits = ((BYTE*)bih) + bih->biSize + (bih->biClrUsed * sizeof(RGBQUAD));
-                    BITMAPINFO* bmi = (BITMAPINFO*)bih;
-                    hBitmap = CreateDIBitmap(hdc, bih, CBM_INIT, bits, bmi, DIB_RGB_COLORS);
-                    ReleaseDC(NULL, hdc);
-                    GlobalUnlock(hDIB);
-                }
-            }
-        }
-
-        if (!CloseClipboard()) {
-            printf("Failed to close clipboard, error: %ld\n", GetLastError()); // <stdio.h>
-        }
-        return (HBITMAP)hBitmap;
-    } else {
-      printf("Failed to open clipboard, error: %ld\n", GetLastError());
+// 檢查剪貼簿內容是否為圖片
+BOOL IsClipboardImage() {
+    if (!OpenClipboard(NULL)) {
+        return FALSE;
     }
-    return hBitmap;
+    BOOL isImage = IsClipboardFormatAvailable(CF_BITMAP) || IsClipboardFormatAvailable(CF_DIB) || IsClipboardFormatAvailable(CF_DIBV5);
+    CloseClipboard();
+    return isImage;
 }
 
-// 提供一個輔助函數來獲取 HBITMAP 作為 HANDLE
-HANDLE GetBitmapHandle(HBITMAP hBitmap) {
-    return (HANDLE)hBitmap;
+typedef struct {
+    HGLOBAL data;
+    DWORD size;
+} BitmapMemory;
+
+
+HBITMAP HandleToHBitmap(HANDLE h) { // 解決: cannot convert hBitmap (variable of type _Ctype_HANDLE) to type _Ctype_HBITMAP
+    return (HBITMAP)h;
+}
+
+BitmapMemory SaveImageToMemory(HBITMAP hBitmap) {
+    BitmapMemory result;
+    result.data = NULL;
+    result.size = 0;
+
+    BITMAP bmp;
+    // https://learn.microsoft.com/zh-tw/windows/win32/api/wingdi/ns-wingdi-bitmapinfo
+    PBITMAPINFO pbmi;
+    WORD cClrBits;
+    PBITMAPINFOHEADER pbih;
+    LPBYTE lpBits;
+    HDC hDC;
+
+    hDC = CreateCompatibleDC(NULL);
+    GetObject(hBitmap, sizeof(BITMAP), (LPSTR)&bmp);
+
+    cClrBits = (WORD)(bmp.bmPlanes * bmp.bmBitsPixel);
+    if (cClrBits == 1)
+        cClrBits = 1;
+    else if (cClrBits <= 4)
+        cClrBits = 4;
+    else if (cClrBits <= 8)
+        cClrBits = 8;
+    else if (cClrBits <= 16)
+        cClrBits = 16;
+    else if (cClrBits <= 24)
+        cClrBits = 24;
+    else
+        cClrBits = 32;
+
+    if (cClrBits != 24)
+        pbmi = (PBITMAPINFO)LocalAlloc(LPTR, sizeof(BITMAPINFOHEADER) + sizeof(RGBQUAD) * (1 << cClrBits));
+    else
+        pbmi = (PBITMAPINFO)LocalAlloc(LPTR, sizeof(BITMAPINFOHEADER));
+
+    pbih = (PBITMAPINFOHEADER)pbmi;
+    pbih->biSize = sizeof(BITMAPINFOHEADER);
+    pbih->biWidth = bmp.bmWidth;
+    pbih->biHeight = bmp.bmHeight;
+    pbih->biPlanes = bmp.bmPlanes;
+    pbih->biBitCount = bmp.bmBitsPixel;
+    if (cClrBits < 24)
+        pbih->biClrUsed = (1 << cClrBits);
+    pbih->biCompression = BI_RGB;
+    // https://learn.microsoft.com/en-us/windows/win32/api/wingdi/ns-wingdi-bitmapinfoheader#calculating-surface-stride
+    // ~在c語言是取反的意思(0變1, 1變0)
+    // 4byte對齊。 (x+31)&^31 不足32bit就多給1個4byte; &~31可以去除尾數; >> 3 相當於除上8 也就是單位從bit換成byte
+    pbih->biSizeImage = (((pbih->biWidth * cClrBits + 31) & ~31) >> 3) * pbih->biHeight;
+    pbih->biClrImportant = 0;
+
+    lpBits = (LPBYTE)GlobalAlloc(GMEM_FIXED, pbih->biSizeImage);
+    if (GetDIBits(hDC, hBitmap, 0, (WORD)pbih->biHeight, lpBits, pbmi, DIB_RGB_COLORS)) {
+        DWORD totalSize = sizeof(BITMAPFILEHEADER) + pbih->biSize + pbih->biClrUsed * sizeof(RGBQUAD) + pbih->biSizeImage;
+
+        // 分配緩衝區並將數據拷貝進去
+        result.data = (LPBYTE)GlobalAlloc(GMEM_FIXED, totalSize);
+        if (result.data != NULL) {
+            // https://learn.microsoft.com/zh-tw/windows/win32/api/wingdi/ns-wingdi-bitmapfileheader
+            BITMAPFILEHEADER hdr;
+            hdr.bfType = 0x4d42; // "BM"
+            hdr.bfSize = totalSize;
+            hdr.bfReserved1 = 0;
+            hdr.bfReserved2 = 0;
+            hdr.bfOffBits = (DWORD)sizeof(BITMAPFILEHEADER) + pbih->biSize + pbih->biClrUsed * sizeof(RGBQUAD);
+
+            // 文件頭、位圖信息頭和位圖數據
+            LPBYTE p = result.data;
+            memcpy(p, &hdr, sizeof(BITMAPFILEHEADER));
+            p += sizeof(BITMAPFILEHEADER);
+            memcpy(p, pbih, sizeof(BITMAPINFOHEADER) + pbih->biClrUsed * sizeof(RGBQUAD));
+            p += sizeof(BITMAPINFOHEADER) + pbih->biClrUsed * sizeof(RGBQUAD);
+            memcpy(p, lpBits, pbih->biSizeImage);
+
+            result.size = totalSize;
+        }
+    }
+    GlobalFree((HGLOBAL)lpBits);
+    LocalFree(pbmi);
+    DeleteDC(hDC);
+
+    return result;
 }

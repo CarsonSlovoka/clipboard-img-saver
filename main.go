@@ -6,15 +6,12 @@ package main
 // #cgo windows LDFLAGS: -lgdi32 -luser32 // user32可以不需要
 #cgo windows LDFLAGS: -lgdi32 -lcomdlg32
 #cgo CFLAGS: -I./csrc
-#include <stdio.h>
 #include "clipboard_helper.c"
 #include "window.c"
 #include "dialog.c"
 */
 import "C"
 import (
-	"bytes"
-	"encoding/binary"
 	"flag"
 	"fmt"
 	"github.com/CarsonSlovoka/clipboard-img-saver/app"
@@ -37,6 +34,10 @@ func EmptyClipboard() {
 }
 
 func saveClipboardImage(outputDir, format string, quality uint8) error {
+	if C.IsClipboardImage() != C.TRUE {
+		// 剪貼簿的內容非圖片
+		return nil
+	}
 
 	// 先問使用者要不要存檔，如果不保存底下的事都不用做
 	// outputPath, err := getSaveFileNameByScan()
@@ -49,114 +50,32 @@ func saveClipboardImage(outputDir, format string, quality uint8) error {
 		return err
 	}
 
-	hBitmap := C.GetClipboardBitmap()
-	if hBitmap == nil {
+	if C.OpenClipboard(nil) == C.FALSE {
+		return fmt.Errorf("剪貼簿開啟失敗")
+	}
+	defer C.CloseClipboard()
+
+	handle := C.GetClipboardData(C.CF_BITMAP)
+	if handle == nil {
 		return fmt.Errorf("剪貼簿中沒有圖片數據")
 	}
-	defer C.DeleteObject(C.HGDIOBJ(hBitmap))
+	defer C.DeleteObject(C.HGDIOBJ(handle))
 
-	// 使用 GetDIBits 獲取位圖訊息與像素數據 (GetBitmapBits已經過時了，不推薦用)
-	hdc := C.GetDC(nil)
-	defer C.ReleaseDC(nil, hdc)
-
-	var bmi C.BITMAPINFO // https://learn.microsoft.com/zh-tw/windows/win32/api/wingdi/ns-wingdi-bitmapinfo
-	// bmi.bmiHeader.biBitCount // 為位元深度，如果它是32表示有alpha通道
-	// C.ZeroMemory(unsafe.Pointer(&bmi), C.sizeof_BITMAPINFO) // could not determine kind of name for C.ZeroMemory
-	C.memset(unsafe.Pointer(&bmi), 0, C.sizeof_BITMAPINFO) // 使用memset替代ZeroMemory
-
-	// 在GetDIBits之前，可以先設定我們要的內容
-	bmi.bmiHeader.biSize = C.DWORD(C.sizeof_BITMAPINFOHEADER)
-	// 位圖訊息, GetDIBits第一次調用取得bmi.Header資訊, BITMAPINFO: https://learn.microsoft.com/en-us/windows/win32/api/wingdi/ns-wingdi-bitmapinfo
-	ret := C.GetDIBits(hdc, hBitmap, 0, 0, nil, &bmi, C.DIB_RGB_COLORS)
-	if ret == 0 {
-		return fmt.Errorf("GetDIBits 取得位圖訊息失敗")
+	var imgBytes []byte
+	bmpMemory := C.SaveImageToMemory(C.HandleToHBitmap(handle))
+	if bmpMemory.data == nil {
+		return fmt.Errorf("SaveImageToMemory 得到 nil")
 	}
-	bmi.bmiHeader.biBitCount = 24
-	bmi.bmiHeader.biCompression = C.BI_RGB // 未壓縮0 BI_RGB; 3: BI_BITFIELDS
-	bmi.bmiHeader.biSizeImage = 0          // 未壓縮就設定為0; 讓後面計算
-
-	// 取得數據緩衝空間大小
-	pixelDataSize := int(bmi.bmiHeader.biSizeImage)
-	if pixelDataSize == 0 {
-		// https://learn.microsoft.com/en-us/windows/win32/api/wingdi/ns-wingdi-bitmapinfoheader#calculating-surface-stride
-		// 4byte對齊，所以不足32bit就多給1個4byte; (x+31)&^31可以+31多出來的尾數去除; >> 3 相當於除上8 也就是單位從bit換成byte
-		// invalid operation: bmi.bmiHeader.biWidth * int32(bmi.bmiHeader.biBitCount) (mismatched types _Ctype_LONG and int32)
-		stride := (((int32(bmi.bmiHeader.biWidth) * int32(bmi.bmiHeader.biBitCount)) + 31) & ^31) >> 3
-		pixelDataSize = int(stride) * int(bmi.bmiHeader.biHeight)
-		// bmi.bmiHeader.biSizeImage = pixelDataSize // cannot use pixelDataSize (variable of type int) as _Ctype_DWORD value in assignment
-		bmi.bmiHeader.biSizeImage = C.DWORD(pixelDataSize)
-	}
-	pixelData := make([]byte, pixelDataSize)
-
-	// 獲取圖像數據, 第二次調用GetDIBits取得取得數據內容 也就是填充BITMAPINFO.bmiColors的內容
-	// ret = C.GetDIBits(hdc, hBitmap, 0, C.UINT(bmi.bmiHeader.biHeight), unsafe.Pointer(&pixelData[0]), &bmi, C.DIB_RGB_COLORS) // cannot use _cgo4 (variable of type unsafe.Pointer) as _Ctype_LPVOID value in argument to _Cfunc_GetDIBits
-	ret = C.GetDIBits(hdc, hBitmap, 0, C.UINT(bmi.bmiHeader.biHeight), C.LPVOID(unsafe.Pointer(&pixelData[0])), &bmi, C.DIB_RGB_COLORS)
-	if ret == 0 {
-		return fmt.Errorf("GetDIBits 獲取圖像數據失敗. errCode %v\n", C.GetLastError())
-	}
-
-	// BMP 文件頭
-	bfHeader := make([]byte, 14) // FileHeader
-
-	// 建立BMP 文件頭 BITMAPFILEHEADER https://learn.microsoft.com/zh-tw/windows/win32/api/wingdi/ns-wingdi-bitmapfileheader
-	// all the integer values are stored in "little-endian" format
-	bfHeader[0] = 'B'
-	bfHeader[1] = 'M'
-	fileSize := 14 + 40
-
-	// TODO 待檢驗
-	nColors := 0
-	if bmi.bmiHeader.biBitCount <= 8 {
-		if bmi.bmiHeader.biClrUsed > 0 {
-			nColors = int(bmi.bmiHeader.biClrUsed)
-		} else {
-			nColors = 1 << bmi.bmiHeader.biBitCount
-		}
-		fileSize += nColors * 4
-	}
-	fileSize += len(pixelData)
-	bfHeader[2] = byte(fileSize)
-	bfHeader[3] = byte(fileSize >> 8)
-	bfHeader[4] = byte(fileSize >> 16)
-	bfHeader[5] = byte(fileSize >> 24)
-	offsetBits := 14 + 40 + nColors*4
-	binary.LittleEndian.PutUint32(bfHeader[10:], uint32(offsetBits))
-
-	// 建立BMP 訊息頭 BITMAPINFOHEADER https://learn.microsoft.com/zh-tw/windows/win32/api/wingdi/ns-wingdi-bitmapinfoheader
-	// 將 BITMAPINFOHEADER 轉成[]byte
-	biHeader := make([]byte, 40) // InfoHeader
-	header := (*[40]byte)(unsafe.Pointer(&bmi.bmiHeader))
-	copy(biHeader[:], header[:])
-
-	// 寫入 BMP 文件
-	buf := bytes.NewBuffer(nil)
-	buf.Write(bfHeader[:])
-	buf.Write(biHeader[:])
-
-	// TODO 待檢驗 處理顏色表
-	if nColors > 0 {
-		colorTableSize := nColors * 4 // 每個 RGBQUAD 佔 4 字節
-		colorTable := make([]byte, colorTableSize)
-		// 讀取顏色表
-		// 由於 Go 無法直接從 C 結構體中獲取動態長度的陣列，這裡需要使用 unsafe 來讀取
-		for i := 0; i < nColors; i++ {
-			rgbQuad := (*[4]byte)(unsafe.Pointer(&bmi.bmiColors[i]))
-			colorTable[i*4] = rgbQuad[0]   // Blue
-			colorTable[i*4+1] = rgbQuad[1] // Green
-			colorTable[i*4+2] = rgbQuad[2] // Red
-			colorTable[i*4+3] = rgbQuad[3] // Reserved
-		}
-		buf.Write(colorTable)
-	}
-
-	buf.Write(pixelData)
+	size := int(bmpMemory.size)
+	imgBytes = C.GoBytes(unsafe.Pointer(bmpMemory.data), C.int(size))
+	C.GlobalFree(C.HGLOBAL(bmpMemory.data)) // 最後不用時記得把它釋放，釋放的目標就是你(LPBYTE)GlobalAlloc(GMEM_FIXED, totalSize);時候得到的產物，也就是result.data
 
 	var result []byte
 	if format == ".webp" {
 		if filepath.Ext(outputPath) == "" {
 			outputPath += ".webp"
 		}
-		result, err = convertToWebP(buf.Bytes(), quality)
+		result, err = convertToWebP(imgBytes, quality)
 		if err != nil {
 			return err
 		}
@@ -165,7 +84,7 @@ func saveClipboardImage(outputDir, format string, quality uint8) error {
 		if filepath.Ext(outputPath) == "" {
 			outputPath += ".bmp"
 		}
-		result = buf.Bytes()
+		result = imgBytes
 	}
 
 	// outputPath = filepath.Join(outputDir, outputPath)  // 如果使用GetSaveFileNameW，出來的路徑已經是絕對路徑
