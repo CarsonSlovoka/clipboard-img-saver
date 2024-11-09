@@ -1,0 +1,13 @@
+{
+  "Version": "<from app.Version>",
+  "ExeName": "<from app.ExeName>",
+  "LdFlags": "-s -w",
+  "Info": {
+    "_": "以下為詳細資訊所用到的檔案資料",
+    "Desc": "Automatically detect images in the clipboard and save them in a specified directory (prompt for filename when saving)",
+    "ProductName": "Clipboard Image saver",
+    "RequireAdmin": false,
+    "Copyright": "Copyright (c) 2024 Carson Tseng",
+    "Lang": "en-us"
+  }
+}

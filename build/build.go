@@ -1,4 +1,4 @@
-//go:generate go run .
+//go:generate go run . --pkgdir=.. github.com/CarsonSlovoka/clipboard-img-saver/build
 
 package main
 
@@ -72,27 +72,87 @@ func ZipSource() error {
 	return nil
 }
 
-func Cmd(name string, args ...string) *exec.Cmd {
+func NewCmd(name, dir string, args ...string) *exec.Cmd {
 	cmd := exec.Command(name, args...)
+	cmd.Dir = dir
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	log.Println(strings.Join(cmd.Args, " "))
 	return cmd
 }
 
 func main() {
-	cmd := Cmd("go",
-		"build",
-		// "-ldflags", "-s -w",
-		// "-tags", "",
-		"-o", "./bin/"+app.ExeName+".exe", // 最後一層目錄不存在會自己建立
-		"-pkgdir", ".",
-	)
-	cmd.Dir = ".."
-	if err := cmd.Run(); err != nil {
+	if err, removeAllTmplFunc := BuildAllTmpl(
+		"app.manifest.gotmpl", "resources.rc.gotmpl",
+		&AppInfoContext{
+			cfg.Version,
+			cfg.ExeName,
+			cfg.Info.Desc,
+			cfg.Info.ProductName,
+			cfg.Info.Copyright,
+			cfg.Info.Lang,
+			cfg.Info.RequireAdmin}); err != nil {
+		log.Fatal(err)
+	} else {
+		defer func() {
+			if err = removeAllTmplFunc(); err != nil {
+				log.Fatal(err)
+			}
+		}()
+	}
+
+	if err := os.MkdirAll("../bin", os.ModePerm); err != nil {
 		log.Fatal(err)
 	}
+
+	for _, cmd := range []*exec.Cmd{
+		// create syso
+		NewCmd("rsrc", ".", "-manifest", "app.manifest",
+			"-o", "../bin/app.syso",
+			// "-ico", "app.ico", // 不要用syso加入圖標，可能會沒辦法執行，建議圖標還是交給ResourceHacker來弄
+		),
+
+		// go build的時候如果存在app.syso，就會自動抓syso裡面的相關資訊(圖標, admin盾牌等等)
+		NewCmd("go", "..",
+			"build",
+			// "-ldflags", "-s -w",
+			// "-tags", "",
+			"-o", "./bin/"+app.ExeName+".exe", // 最後一層目錄不存在會自己建立
+			"-pkgdir", ".",
+		),
+
+		// "resource.rc" to "resource.res"
+		NewCmd("ResourceHacker", ".",
+			"-open", "resources.rc", "-save", "../bin/resources.res",
+			"-action", "compile",
+			"-log", "CONSOLE",
+		),
+
+		// AddVersionInfo
+		NewCmd(
+			"ResourceHacker", "../bin",
+			"-open", app.ExeName+".exe", "-save", app.ExeName+".exe",
+			"-resource", "resources.res",
+			"-action", "addoverwrite",
+			"-mask", "VersionInf",
+			"-log", "CONSOLE",
+		),
+		// Add icon
+		NewCmd(
+			"ResourceHacker", "../bin",
+			"-open", app.ExeName+".exe", "-save", app.ExeName+".exe",
+			"-resource", "../build/app.ico",
+			"-mask", "ICONGROUP,MAINICON,", // 注意icon的mask後面要有","不然會失敗
+			"-action", "addoverwrite",
+			"-log", "CONSOLE",
+		),
+	} {
+		log.Println(YText(strings.Join(cmd.Args, " ")))
+		if err := cmd.Run(); err != nil {
+			log.Fatal(err)
+		}
+	}
+
 	if err := ZipSource(); err != nil {
 		log.Fatal(err)
 	}

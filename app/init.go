@@ -3,7 +3,7 @@ package app
 const (
 	Name    string = "Clipboard Image saver"
 	ExeName string = "cis"
-	Version string = "v0.1.0"
+	Version string = "v0.2.0"
 )
 
 func About() string {
